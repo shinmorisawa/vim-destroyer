@@ -35,6 +35,11 @@ void arena_free(Arena* arena) {
     free(arena);
 }
 
+void arena_reset(Arena* arena) {
+    arena->last_offset = arena->current_offset;
+    arena->current_offset = 0;
+}
+
 void* arena_push(Arena* arena, u64 size) {
     u64 aligned_size = (size + 7) & ~7;
     assert(arena->current_offset + aligned_size <= arena->capacity);

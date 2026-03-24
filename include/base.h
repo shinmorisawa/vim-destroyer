@@ -97,5 +97,5 @@ typedef struct Result {
             y = _tmp;             \
         })
 
-#define log printf
+#    define log printf
 #endif
