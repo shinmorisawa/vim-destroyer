@@ -5,6 +5,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -95,4 +96,6 @@ typedef struct Result {
             x = (y);              \
             y = _tmp;             \
         })
+
+#define log printf
 #endif
