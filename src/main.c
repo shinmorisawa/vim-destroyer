@@ -1,15 +1,32 @@
-#include "vector.h"
+#include "color.h"
 #include <stdio.h>
+#include <stdlib.h>
 
-DeclareVector(u32) int main() {
-    Vectoru32 list = vectoru32_init(0);
+void color_printer(ColorXYZ xyz) {
+    ColorRGB rgb = color_xyz_to_rgb(xyz);
+    rgb = color_tonemap_lottes(rgb);
+    rgb = linear_to_srgb(rgb);
 
-    for (int i = 0; i < 50; i++) {
-        vectoru32_push(&list, 0xCAFEBABE);
-        vectoru32_push(&list, 0xDEADBEEF);
-    }
+    int r = clamp((int)(rgb.r * 255), 0, 256);
+    int g = clamp((int)(rgb.g * 255), 0, 256);
+    int b = clamp((int)(rgb.b * 255), 0, 256);
 
-    for (int i = 0; i < 50; i++) {
-        log("%X %X\n", list.data[2 * i], list.data[(2 * i) + 1]);
-    }
+    printf("\033[48;2;%d;%d;%dm#%2x%2x%2x", r, g, b, r, g, b);
+    printf("\033[0m\n");
+}
+
+int main() {
+    ColorHandler handler = {.color_xyz = color_printer,
+                            .supported_spaces = XYZ};
+
+    color_install_handler(handler);
+
+    double gain = 1;
+    ColorXYZ a = color_cherenkov_to_xyz(1.33);
+
+    a.x *= gain;
+    a.y *= gain;
+    a.z *= gain;
+    Color color = {.color_xyz = a, .type = XYZ};
+    color_run_handler(0, color);
 }

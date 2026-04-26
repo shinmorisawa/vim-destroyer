@@ -20,7 +20,7 @@ typedef struct Arena {
 Arena* arena_init(u64 size) {
     Arena* arena = malloc(sizeof(Arena) + size);
     if (unlikely(!arena)) {
-        log("[arena] alloc failed\n");
+        printf("[arena] alloc failed\n");
         panick;
     }
     arena->capacity = size;

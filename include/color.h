@@ -67,6 +67,10 @@ typedef struct Color {
     ColorSpaces type;
 } Color;
 
+typedef struct CMFEntry {
+    double x, y, z;
+} CMFEntry;
+
 // beware:
 // t is assumed to be between 0,1
 // t is normalized
@@ -149,14 +153,36 @@ ColorOKLAB color_oklab_lerp(ColorOKLAB start, ColorOKLAB end, double t);
 // Linear interpolate between 2 OKLch colors
 ColorOKLCH color_oklch_lerp(ColorOKLCH start, ColorOKLCH end, double t);
 
+// install a ColorHandler
 void color_install_handler(ColorHandler handler);
+// run a ColorHandler
 void color_run_handler(u64 index, Color color);
 
+// convert linear rgb to sRGB
 ColorRGB linear_to_srgb(ColorRGB rgb);
+
+// sample the cmf lut from cie 1931 2deg 1nm
+ColorXYZ color_sample_cmf(double wavelength);
+
+// does something with blackbodies, idk
+double color_planck_spectral_exitance(double wavelength, double kelvin);
+
+// convert kelvin to xyz
+ColorXYZ color_kelvin_to_xyz(double kelvin);
+// convert refractive index to xyz (cherenkov radiation)
+ColorXYZ color_cherenkov_to_xyz(double refractive_index);
+
+// tonemapping
+ColorRGB color_tonemap_lottes(ColorRGB rgb);
 
 #ifndef NO_COLOR_IMPLEMENTATION
 #    include <math.h>
 #    include <stdio.h>
+
+#    define PI             3.14159265358979323846
+#    define PLANCK_H       6.62607015e-34
+#    define SPEED_OF_LIGHT 299792458.0
+#    define BOLTZMANN_K    1.380649e-23
 
 // matrices and stuff
 static double xyz_rgb_mat[3][3] = {{3.2406255, -1.5372080, -0.4986286},
@@ -199,13 +225,12 @@ ColorRGB color_xyz_to_rgb(ColorXYZ xyz) {
     rgb.b = xyz_rgb_mat[2][0] * xyz.x + xyz_rgb_mat[2][1] * xyz.y +
             xyz_rgb_mat[2][2] * xyz.z;
 
-    if (rgb.r > 1) rgb.r = 1;
-    if (rgb.g > 1) rgb.g = 1;
-    if (rgb.b > 1) rgb.b = 1;
-
-    if (rgb.r < 0) rgb.r = 0;
-    if (rgb.g < 0) rgb.g = 0;
-    if (rgb.b < 0) rgb.b = 0;
+    if (rgb.r > 1.0) rgb.r = 1.0;
+    if (rgb.r < 0.0) rgb.r = 0.0;
+    if (rgb.g > 1.0) rgb.g = 1.0;
+    if (rgb.g < 0.0) rgb.g = 0.0;
+    if (rgb.b > 1.0) rgb.b = 1.0;
+    if (rgb.b < 0.0) rgb.b = 0.0;
 
     return rgb;
 }
@@ -564,4 +589,108 @@ ColorRGB linear_to_srgb(ColorRGB rgb) {
 
     return rgb;
 }
+
+// actual sick (can be interpreted both ways) color science
+#    include "color/cie_1931_2deg_lut.h"
+
+ColorXYZ color_sample_cmf(double wavelength) {
+    if (wavelength < 360.0 || wavelength > 830.0) { return (ColorXYZ) {0}; }
+
+    double idx_f = (wavelength - 360.0);
+    int idx = (int)idx_f;
+    double t = idx_f - (double)idx;
+
+    int idx_next = (idx < 470) ? idx + 1 : idx;
+
+    ColorXYZ final;
+    final.x = lerp(cie_1931_2deg_1nm[idx].x, cie_1931_2deg_1nm[idx_next].x, t);
+    final.y = lerp(cie_1931_2deg_1nm[idx].y, cie_1931_2deg_1nm[idx_next].y, t);
+    final.z = lerp(cie_1931_2deg_1nm[idx].z, cie_1931_2deg_1nm[idx_next].z, t);
+
+    return final;
+}
+
+double color_planck_spectral_exitance(double wavelength, double kelvin) {
+    double lambda = wavelength * 1e-9;
+    double c1 = 2.0 * PI * PLANCK_H * (SPEED_OF_LIGHT * SPEED_OF_LIGHT);
+    double c2 = (PLANCK_H * SPEED_OF_LIGHT) / BOLTZMANN_K;
+    double exponent = c2 / (lambda * kelvin);
+    if (exponent > 700.0) return 0.0;
+    return (c1 / pow(lambda, 5.0)) * (1.0 / (exp(exponent) - 1.0));
+}
+
+ColorXYZ color_kelvin_to_xyz(double kelvin) {
+    ColorXYZ final = {0};
+    for (double l = 360.0; l <= 830.0; l += 1.0) {
+        double spectral_energy = color_planck_spectral_exitance(l, kelvin);
+        ColorXYZ sensitivity = color_sample_cmf(l);
+        final.x += spectral_energy * sensitivity.x;
+        final.y += spectral_energy * sensitivity.y;
+        final.z += spectral_energy * sensitivity.z;
+    }
+
+#    ifndef COLOR_NO_CHROMATICITY_THING_IN_KELVIN_TO_XYZ
+    if (final.y > 0) {
+        double scale = 1.0 / final.y;
+        final.x *= scale;
+        final.y *= scale;
+        final.z *= scale;
+    }
+#    endif
+
+    return final;
+}
+
+static double absorption_coeff(double l) {
+    if (l < 420) return 0.01;
+    if (l < 500) return 0.005;
+    if (l < 600) return 0.1;
+    return 0.6;
+}
+
+ColorXYZ color_cherenkov_to_xyz(double refractive_index) {
+    ColorXYZ final = {0};
+    for (double l = 360.0; l <= 830.0; l += 1.0) {
+        double n_lambda = refractive_index + (0.003 / pow(l / 1000.0, 2.0));
+        double factor = 1.0 - (1.0 / (n_lambda * n_lambda));
+        double spectral_power = factor / (l * l);
+        ColorXYZ sensitivity = color_sample_cmf(l);
+
+#    ifndef COLOR_NO_WATER_ABSORPTION_SIMULATION_IN_CHERENKOV_TO_XYZ
+        double attenuation = exp(-10.0 * absorption_coeff(l));
+        spectral_power *= attenuation;
+#    endif
+
+        final.x += spectral_power * sensitivity.x;
+        final.y += spectral_power * sensitivity.y;
+        final.z += spectral_power * sensitivity.z;
+    }
+
+#    ifndef COLOR_NO_CHROMATICITY_THING_IN_CHERENKOV_TO_XYZ
+    if (final.y > 0) {
+        double scale = 1.0 / final.y;
+        final.x *= scale;
+        final.y *= scale;
+        final.z *= scale;
+    }
+#    endif
+
+    return final;
+}
+
+// tonemapping!! yippee :(
+ColorRGB color_tonemap_lottes(ColorRGB rgb) {
+    const double a = 1.6;
+    const double d = 0.977;
+
+    const double b = 0.0357074191315325;
+    const double c = 1.0152084742456437;
+
+    rgb.r = pow(fmax(0.0, rgb.r), a) / (pow(fmax(0.0, rgb.r), a * d) * c + b);
+    rgb.g = pow(fmax(0.0, rgb.g), a) / (pow(fmax(0.0, rgb.g), a * d) * c + b);
+    rgb.b = pow(fmax(0.0, rgb.b), a) / (pow(fmax(0.0, rgb.b), a * d) * c + b);
+
+    return rgb;
+}
+
 #endif

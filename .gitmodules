@@ -1,0 +1,3 @@
+[submodule "lib/tengine"]
+	path = lib/tengine
+	url = https://github.com/shinmorisawa/tengine.git
