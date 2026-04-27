@@ -1,3 +1,4 @@
 srcs = files(
-  'main.c'
+  'main.c',
+  'input.c'
 )
